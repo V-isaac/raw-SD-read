@@ -1,8 +1,16 @@
 #include <SPI.h>
 
-// #pragma pack(1)
-
 // #define DEBUG
+
+#ifdef DEBUG
+#define D_WRITE_BLOCK
+#define D_READ_BLOCK
+//#define D_SETUP
+//#define D_SEND_CMD
+//#define D_INIT
+//#define D_SAVE
+#endif
+
 
 #define SD_CS   26
 #define SD_MOSI 14
@@ -22,11 +30,12 @@ SPIClass *vspi = NULL;
 SPISettings spiset(250000, MSBFIRST, SPI_MODE0);
 
 struct dataPoint{
-  uint32_t valueX;
-  uint32_t valueY;
+  double valueX;
+  double valueY;
 
   uint8_t theRest[56];
 };
+
 
 void setup(){
   Serial.begin(115200);
@@ -35,7 +44,7 @@ void setup(){
 
   start:
 
-  Serial.println("waiting for input");
+  Serial.println("Waiting for input");
   while(!Serial.available()){}
   Serial.read();
 
@@ -43,13 +52,13 @@ void setup(){
   vspi -> begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
   pinMode(vspi -> pinSS(), OUTPUT);
   digitalWrite(vspi -> pinSS(), HIGH);
-  #ifdef DEBUG
-    Serial.println("spi inited");
+  #ifdef D_INIT
+    Serial.println("SPI inited");
   #endif
   
   if(!cardInit()){
-  #ifdef DEBUG
-    Serial.println("failed to init");
+  #ifdef D_INIT
+    Serial.println("Failed to init");
   #endif
     vspi -> end();
     goto start;
@@ -57,8 +66,8 @@ void setup(){
 
   uint32_t initial = 0;
   if(!writeBlock(0, (uint8_t*)&initial, 4)){
-  #ifdef DEBUG
-    Serial.println("failed to reset first block");
+  #ifdef D_INIT
+    Serial.println("Failed to reset first block");
   #endif
     vspi -> end();
     goto start;
@@ -66,17 +75,18 @@ void setup(){
 
   dataPoint firstData {};
 
-  for(uint32_t ang = 0; ang < 10; ang += 1){
-    Serial.print("Writing 2x 5y: " + String(ang));
-    Serial.print("\t" + String(ang * 2));
-    Serial.println("\t" + String(ang * 5));
+  for(double ang = 0; ang < 1; ang += 0.1){
+    firstData.valueX = ang;
+    firstData.valueY = sin(ang);
 
-    firstData.valueX = ang * 2;
-    firstData.valueY = ang * 5;
+    Serial.print("Writing ");
+    Serial.print(firstData.valueX);
+    Serial.print("\t");
+    Serial.println(firstData.valueY);
 
     if(!saveData(&firstData)){
     #ifdef DEBUG
-        Serial.println("failed to save data");
+        Serial.println("Failed to save data");
     #endif
       vspi -> end();
       goto start;
@@ -84,25 +94,18 @@ void setup(){
   }
   Serial.println("Have written successfully");
 
-  uint8_t buf[8];
+  uint8_t buf[16];
   for(int ang = 2; ang <= 11; ang++){
-    if (!readBlock(ang, (uint8_t*)&buf, 8)){
+    if (!readBlock(ang, (uint8_t*)&buf, 16)){
       #ifdef DEBUG
-          Serial.println("failed to read data");
+          Serial.println("Failed to read data");
       #endif
       vspi -> end();
       goto start;
     };
 
-    memcpy(&firstData.valueX, &buf,sizeof(uint32_t));
-    memcpy(&firstData.valueY, &buf[4],sizeof(uint32_t));
-
-    // firstData.valueX = (buf[3] << 24) | (buf[2] << 16) | (buf[1] << 8) | buf[0]
-    // firstData.valueY = (buf[7] << 24) | (buf[6] << 16) | (buf[5] << 8) | buf[4]
-
-
-    //firstData.valueX = *((double*) buf[0]);
-    //firstData.valueY = *((double*) buf[4]);
+    memcpy(&firstData.valueX, &buf   ,sizeof(double));
+    memcpy(&firstData.valueY, &buf[8],sizeof(double));
 
     Serial.print("data:\t");
     Serial.print(firstData.valueX);
@@ -114,7 +117,7 @@ void setup(){
 }
 
 void sendCMD(uint8_t cmd, uint32_t arg, uint8_t crc){
-  #ifdef DEBUG
+  #ifdef D_SEND_CMD
     Serial.print("sending cmd\t");
     Serial.print(cmd);
     Serial.print("\t");
@@ -124,6 +127,7 @@ void sendCMD(uint8_t cmd, uint32_t arg, uint8_t crc){
     Serial.print(arg & 0xFF, HEX);
     Serial.println();
   #endif
+
   waitCard();
 
   vspi -> beginTransaction(spiset);
@@ -179,8 +183,8 @@ bool cardInit(){
   digitalWrite(vspi -> pinSS(), LOW);
   sendCMD(0, 0, 0x95);
   if(readCard() != 0x01){
-    #ifdef DEBUG
-      Serial.println("failed to idle");
+    #ifdef D_INIT
+      Serial.println("Failed to idle");
     #endif
     digitalWrite(vspi -> pinSS(), HIGH);
     return false;
@@ -188,8 +192,8 @@ bool cardInit(){
 
   sendCMD(8, 0x01AA, 0x87);
   if(readCard() != 0x01){
-    #ifdef DEBUG
-      Serial.println("failed to confirm version");
+    #ifdef D_INIT
+      Serial.println("Failed to confirm version");
     #endif
     digitalWrite(vspi -> pinSS(), HIGH);
     return false;
@@ -197,14 +201,16 @@ bool cardInit(){
 
   uint8_t tries = 10;
   for(uint8_t i = 0; i < tries; i++){
-    #ifdef DEBUG
-      Serial.print("attempt to init n"); Serial.println(i);
+    #ifdef D_INIT
+      Serial.print("Attempt to init n"); Serial.println(i);
     #endif
+
     sendCMD(55, 0, 0x01);
     if(readCard() != 0x01){
-    #ifdef DEBUG
-        Serial.println("failed to ack");
-    #endif
+      #ifdef D_INIT
+          Serial.println("Failed to ack");
+      #endif
+
       digitalWrite(vspi -> pinSS(), HIGH);
       return false;
     }
@@ -220,20 +226,21 @@ bool cardInit(){
 }
 
 bool readBlock(uint32_t adr, uint8_t* buf, uint16_t buf_size){
-    #ifdef DEBUG
-    Serial.print("reading block\t");
+  #ifdef D_READ_BLOCK
+    Serial.print("Reading block\t");
     Serial.print(String(adr) + "\t");
     for(uint16_t i = 0; i < buf_size; i++)
       Serial.print(((uint8_t*)buf)[i], HEX);
     Serial.print("\t");
     Serial.println(buf_size);
   #endif
+
   digitalWrite(vspi -> pinSS(), LOW);
 
   sendCMD(17, adr, 0x01);
   if(readCard() != 0x00){
     #ifdef DEBUG
-      Serial.println("failed to send read cmd");
+      Serial.println("Failed to send read cmd");
     #endif
     digitalWrite(vspi -> pinSS(), HIGH);
     return false;
@@ -259,21 +266,23 @@ bool readBlock(uint32_t adr, uint8_t* buf, uint16_t buf_size){
 }
 
 bool writeBlock(uint32_t adr, const void* buf, uint16_t buf_size){
-  #ifdef DEBUG
-    Serial.print("writing block\t");
+  #ifdef D_WRITE_BLOCK
+    Serial.print("Writing block\t");
     Serial.print(String(adr) + "\t");
     for(uint16_t i = 0; i < buf_size; i++)
       Serial.print(((uint8_t*)buf)[i], HEX);
     Serial.print("\t");
     Serial.println(buf_size);
   #endif
+
   digitalWrite(vspi -> pinSS(), LOW);
 
   sendCMD(24, adr, 0x01);
   if(readCard() != 0x00){
     #ifdef DEBUG
-      Serial.println("failed to send cmd");
+      Serial.println("Failed to send cmd while writing block");
     #endif
+
     digitalWrite(vspi -> pinSS(), HIGH);
     return false;
   }
@@ -294,7 +303,7 @@ bool writeBlock(uint32_t adr, const void* buf, uint16_t buf_size){
     vspi -> endTransaction();
     digitalWrite(vspi -> pinSS(), HIGH);
     #ifdef DEBUG
-      Serial.println("data wasn't accepted");
+      Serial.println("Data wasn't accepted. Something with the card?");
     #endif
     return false;
   }
@@ -307,29 +316,29 @@ bool writeBlock(uint32_t adr, const void* buf, uint16_t buf_size){
   return true;
 }
 
-bool saveData(const dataPoint* data){
-  #ifdef DEBUG
-    Serial.println("saving");
+bool saveData(const void* data){
+  #ifdef D_SAVE
+    Serial.println("saving...");
   #endif
 
   uint32_t count = 0;
   if(!readBlock(0,(uint8_t*)&count, 4)){ 
-    #ifdef DEBUG
-      Serial.println("failed to read first block");
+    #ifdef D_SAVE
+      Serial.println("Failed to read first block");
     #endif
     return false; 
   }
 
   count++;
   if(!writeBlock(0,(uint8_t*)&count, 4)){ 
-    #ifdef DEBUG
-      Serial.println("failed to write first block");
+    #ifdef D_SAVE
+      Serial.println("Failed to write first block");
     #endif
     return false;
   }
   if(!writeBlock(count+1, data, sizeof(dataPoint))) {
-    #ifdef DEBUG
-      Serial.println("failed to write block");
+    #ifdef D_SAVE
+      Serial.println("Failed to write block");
     #endif
     return false; 
   }
